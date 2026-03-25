@@ -44,6 +44,7 @@
   const VIEWER_BAR_ID = "justagram-utility-viewer-bar";
   const HIDDEN_NAV_REASON = "nav";
   const DISABLED_LINK_REASON = "direct-link";
+  const VIEWER_CHROME_REASON = "viewer-chrome";
   const VIEWER_PENDING_TTL_MS = 15000;
   const VIEWER_CANONICALIZATION_TTL_MS = 5000;
   const BLOCKED_KEYBOARD_KEYS = new Set([
@@ -70,6 +71,8 @@
     /^\/p\/[^/]+\/?$/,
     /^\/stories\/[^/].*$/,
     /^\/reels\/[^/]+\/?$/,
+    /^\/share\/reel\/[^/]+\/?$/,
+    /^\/share\/p\/[^/]+\/?$/,
   ];
   const TRANSIENT_VIEWER_PATTERNS = [/^\/reels\/?$/];
 
@@ -159,6 +162,21 @@
     return isStrictViewerRoute(path) || isTransientViewerRoute(path);
   }
 
+  function canonicalizeViewerPath(path: string): string | null {
+    const normalized = normalizePath(path);
+    const shareReelMatch = normalized.match(/^\/share\/reel\/([^/]+)\/?$/);
+    if (shareReelMatch) {
+      return normalizePath(`/reel/${shareReelMatch[1]}/`);
+    }
+
+    const sharePostMatch = normalized.match(/^\/share\/p\/([^/]+)\/?$/);
+    if (sharePostMatch) {
+      return normalizePath(`/p/${sharePostMatch[1]}/`);
+    }
+
+    return null;
+  }
+
   function isExternalHref(href: string | null | undefined): boolean {
     if (!href) {
       return false;
@@ -209,6 +227,7 @@
 
     restoreMaskedElements(HIDDEN_NAV_REASON);
     restoreDisabledInteractions(DISABLED_LINK_REASON);
+    restoreMaskedElements(VIEWER_CHROME_REASON);
     document.getElementById(STYLE_ID)?.remove();
     document.getElementById(VIEWER_BAR_ID)?.remove();
     delete document.documentElement.dataset.justagramMode;
@@ -461,6 +480,7 @@
   function sanitizeDirectDom(path: string): void {
     persistLastDirectPath(path);
     clearActiveViewer();
+    restoreMaskedElements(VIEWER_CHROME_REASON);
     setMode("utility");
     hideGlobalNav();
     restoreDisabledInteractions(DISABLED_LINK_REASON);
@@ -498,13 +518,62 @@
     restoreDisabledInteractions(DISABLED_LINK_REASON);
     setMode("viewer");
     hideGlobalNav();
+    hideViewerChrome();
   }
 
   function redirectToDirect(): void {
     clearPendingViewer();
     clearActiveViewer();
     restoreDisabledInteractions(DISABLED_LINK_REASON);
+    restoreMaskedElements(VIEWER_CHROME_REASON);
     navigateTo(lastDirectPath || DEFAULT_RETURN_PATH);
+  }
+
+  function hideViewerChrome(): void {
+    restoreMaskedElements(VIEWER_CHROME_REASON);
+
+    document.querySelectorAll<HTMLElement>("body *").forEach((element) => {
+      if (element.id === VIEWER_BAR_ID || element.closest(`#${VIEWER_BAR_ID}`)) {
+        return;
+      }
+
+      const style = window.getComputedStyle(element);
+      if (style.display === "none" || style.visibility === "hidden") {
+        return;
+      }
+
+      const rect = element.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) {
+        return;
+      }
+
+      const isFixedChrome =
+        (style.position === "fixed" || style.position === "sticky") &&
+        rect.bottom >= window.innerHeight - 8 &&
+        rect.height <= 160;
+
+      const text = (element.getAttribute("aria-label") ?? "") +
+        " " +
+        (element.getAttribute("title") ?? "") +
+        " " +
+        (element.textContent ?? "");
+      const loweredText = text.toLowerCase();
+      const hasViewerNavHints =
+        loweredText.includes("message") ||
+        loweredText.includes("mensaje") ||
+        loweredText.includes("profile") ||
+        loweredText.includes("perfil");
+
+      const href =
+        element instanceof HTMLAnchorElement
+          ? element.getAttribute("href") ?? ""
+          : "";
+      const leadsToDirect = href.includes("/direct/");
+
+      if (isFixedChrome || hasViewerNavHints || leadsToDirect) {
+        maskElement(element, VIEWER_CHROME_REASON);
+      }
+    });
   }
 
   function queueSanitize(): void {
@@ -542,9 +611,24 @@
 
   function applyRoutePolicy(): void {
     const path = normalizePath(window.location.pathname);
+    const canonicalViewerPath = canonicalizeViewerPath(path);
+
+    if (canonicalViewerPath) {
+      const currentHash = window.location.hash ?? "";
+      const canonicalUrl = new URL(
+        `${canonicalViewerPath}${currentHash}`,
+        window.location.origin
+      ).toString();
+
+      if (window.location.href !== canonicalUrl) {
+        window.location.replace(canonicalUrl);
+        return;
+      }
+    }
 
     if (isAuthRoute(path)) {
       clearActiveViewer();
+      restoreMaskedElements(VIEWER_CHROME_REASON);
       setMode("utility");
       renderViewerBar(false);
       return;
@@ -744,6 +828,9 @@
 
     observer = new MutationObserver(() => {
       hideGlobalNav();
+      if (viewerSession) {
+        hideViewerChrome();
+      }
     });
 
     observer.observe(document.documentElement, {
