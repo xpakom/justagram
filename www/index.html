@@ -3,13 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src * 'unsafe-inline' 'unsafe-eval' data: gap: content:">
-    <title>JustAgram</title>
+    <meta
+        http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    >
+    <title>JustAgram Utility</title>
     <link rel="stylesheet" href="app/css/style.css">
 </head>
 <body>
     <div class="loading-container">
-        <h1>JustAgram</h1>
+        <h1>JustAgram Utility</h1>
         <p>Loading Instagram...</p>
         <div class="spinner"></div>
         <button id="launch-btn" disabled style="margin-top: 2rem;">Launch JustAgram</button>

@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">JustAgram</string>
-    <string name="title_activity_main">JustAgram</string>
-    <string name="package_name">com.cleaninsta.app</string>
-    <string name="custom_url_scheme">com.cleaninsta.app</string>
+    <string name="app_name">JustAgram Utility</string>
+    <string name="title_activity_main">JustAgram Utility</string>
+    <string name="package_name">com.paco.justagram.utility</string>
+    <string name="custom_url_scheme">com.paco.justagram.utility</string>
 </resources>

@@ -1,9 +1,6 @@
-import type { JustagramData } from './index';
+import type { JustagramConfig } from "./index";
 
 declare global {
-  /**
-   * Cordova object injected by the native wrapper at runtime.
-   */
   interface Cordova {
     InAppBrowser: {
       open(url: string, target?: string, options?: string): InAppBrowser;
@@ -21,9 +18,6 @@ declare global {
     insertCSS(details: { code?: string; file?: string }, callback?: () => void): void;
   }
 
-  /**
-   * Navigator extensions added by Cordova plugins.
-   */
   interface Navigator {
     app: {
       exitApp(): void;
@@ -31,31 +25,10 @@ declare global {
   }
 
   interface Window {
-    /**
-     * Data injected by the main app into Instagram's page.
-     * Contains HTML templates and CSS rules for the settings menu.
-     */
-    __JUSTAGRAM_DATA__?: JustagramData;
+    __JUSTAGRAM_CONFIG__?: JustagramConfig;
     cordova: Cordova;
-    webkit?: {
-      messageHandlers?: {
-        cordova_iab?: {
-          postMessage(message: string): void;
-        };
-      };
-    };
-    JustagramBlocker: JustagramBlockerAPI;
-    JustagramDOMHandlers: Record<string, () => void>;
   }
 
-  interface JustagramBlockerAPI {
-    add: (substring: string) => void;
-    clear: () => void;
-    print: () => void;
-    isBlocked: (url: string) => boolean;
-  }
-
-  /** Apache Cordova instance */
   var cordova: Cordova;
 }
 

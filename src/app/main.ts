@@ -16,10 +16,8 @@ if (typeof cordova !== 'undefined') {
 async function onDeviceReady(): Promise<void> {
   console.log("Device ready - Launching JustAgram");
 
-  // Initialize theme (status bar)
   await ThemeService.init();
 
-  // Load assets (includes Settings loading)
   const data = await AssetService.loadAssets();
 
   const launchBtn = document.getElementById("launch-btn");
@@ -29,7 +27,6 @@ async function onDeviceReady(): Promise<void> {
     });
   }
 
-  // Open browser
   await BrowserService.open(data);
   ThemeService.enableButtons();
 }

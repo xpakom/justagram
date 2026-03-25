@@ -1,4 +1,4 @@
-package com.cleaninsta.app;
+package com.paco.justagram.utility;
 
 import com.getcapacitor.BridgeActivity;
 

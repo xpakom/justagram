@@ -30,11 +30,10 @@
   },
   "dependencies": {
     "@capacitor/android": "^8.0.0",
-    "@capacitor/assets": "^3.0.5",
     "@capacitor/cli": "^8.0.0",
     "@capacitor/core": "^8.0.0",
     "@capacitor/ios": "^8.0.0",
     "@capacitor/status-bar": "^8.0.0",
-    "cordova-plugin-inappbrowser": "github:AlexMatter1512/cordova-plugin-inappbrowser"
+    "cordova-plugin-inappbrowser": "github:AlexMatter1512/cordova-plugin-inappbrowser#d5a9f0c"
   }
 }

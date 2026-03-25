@@ -1,0 +1,277 @@
+# HARDENING
+
+## Executive summary
+
+This fork is now a narrower "Instagram utility" wrapper:
+
+- default entry is `/direct/inbox/`
+- discovery routes (`/`, `/explore/`, `/reels/`, `/reels/audio/`) are redirected away
+- the injected layer is reduced to one script and one minimal config global
+- network interception and app-webview message handling are removed from the active app flow
+- Android release hardening is enabled and a local unsigned release APK was built successfully
+
+## Original risk areas
+
+The original fork exposed more power than needed for a personal-account utility wrapper:
+
+- multi-script injection from `src/injected/ts/`
+- runtime HTML/CSS/data asset injection for an in-page menu and toggle system
+- `window.fetch` and `XMLHttpRequest` patching via `patch_fetch.ts`
+- route-specific blocklists loaded from `blockmap.json`
+- app-webview messaging for settings persistence, status bar color changes, and a watchdog ping
+- `beforeload` enabled in Capacitor config even though the app goal does not need request interception
+- broad shell CSP in `src/app/index.html`
+- Android backup allowed, no explicit cleartext policy, no release shrink/minify
+- Google Services hooks left in Gradle even though no telemetry/push stack was intended
+
+## What was removed
+
+Deleted from source:
+
+- `src/injected/ts/patch_fetch.ts`
+- `src/injected/ts/patch_load.ts`
+- `src/injected/ts/patch_pushState.ts`
+- `src/injected/ts/app_menu.ts`
+- `src/injected/ts/app_settings_css.ts`
+- `src/injected/ts/app_statusBar.ts`
+- `src/injected/ts/app_watchdog.ts`
+- `src/injected/ts/handler_home.ts`
+- `src/injected/ts/handler_explore.ts`
+- `src/injected/data/blockmap.json`
+- injected menu HTML/CSS assets
+- `src/app/services/SettingsService.ts`
+
+Removed from active flow:
+
+- all `fetch`/XHR interception
+- blocklist-driven network blocking
+- active app-webview message handling
+- in-page settings/toggles UI
+- `beforeload` configuration in `capacitor.config.ts`
+- Google Services Gradle plugin wiring
+
+## What remains
+
+- `cordova-plugin-inappbrowser` fork is still required because the wrapper depends on script injection
+- one injected script, `src/injected/ts/utility_mode.ts`
+- one minimal config global, `window.__JUSTAGRAM_CONFIG__`
+- Capacitor status bar plugin for basic shell appearance only
+
+## Utility mode implementation
+
+### Route strategy
+
+Default route:
+
+- `/direct/inbox/`
+
+Blocked discovery routes:
+
+- `/`
+- `/explore/`
+- `/reels/`
+- `/reels/audio/`
+
+Viewer routes allowed once:
+
+- `*/reel/<id>/`
+- `*/p/<id>/`
+- `/stories/...`
+
+### DOM and viewer locking
+
+The injected script uses route-first control with DOM cleanup as a second layer:
+
+1. It watches history changes and `popstate`.
+2. If the user lands on a blocked discovery route, it redirects back to `/direct/inbox/`.
+3. If the user opens a reel/post/story route, that route becomes the current allowed viewer item.
+4. While in that viewer:
+   - scroll/wheel/touchmove/page navigation keys are blocked
+   - a fixed "Back to Direct" utility bar is shown
+   - discovery entry points in nav/tab bars are hidden
+   - links in `main` that point to other posts/reels/stories are hidden and disabled
+   - siblings after the first viewer container inside `main` are hidden
+5. If Instagram tries to advance to another viewer route from the current viewer session, the script redirects back to the last utility route, usually Direct
+
+This gives the target UX:
+
+- you can open the specific item sent in DM
+- you can see that item
+- you do not continue into the next reel/post/story loop
+
+### DOM/routing evidence used
+
+Public route inspection on 2026-03-25 showed:
+
+- `/direct/` redirects to login when unauthenticated
+- public profile grids expose content routes like `/instagram/reel/<id>/` and `/instagram/p/<id>/`
+- story highlights use `/stories/highlights/<id>/`
+- public post/reel pages render a `main` area with an `article` for the current item followed by related "more posts" content
+
+That informed the current implementation:
+
+- route matching is based on path shapes, not brittle class names
+- related-content suppression is based on hiding extra viewer siblings and media links under `main`
+
+Limitations of that inspection:
+
+- authenticated DM DOM was not inspected directly because no account credentials were used in automation
+- Instagram can still change logged-in mobile DOM or route behavior in the future
+
+## Android hardening
+
+Applied changes:
+
+- `android:allowBackup="false"`
+- `android:usesCleartextTraffic="false"`
+- package and namespace changed to `com.paco.justagram.utility`
+- release build is not debuggable
+- `minifyEnabled true`
+- `shrinkResources true`
+- release signing config can be provided through environment variables
+- only explicit app permission kept is `android.permission.INTERNET`
+
+Observed generated permission in the built APK:
+
+- `com.paco.justagram.utility.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`
+
+That permission is generated by the Android toolchain for non-exported dynamic receivers and is not telemetry-related.
+
+### Java compatibility note
+
+The local environment only had Java 17 available. Capacitor's generated Android config requested Java 21 source compatibility, which blocked release compilation.
+
+To keep the build local and reproducible here, `android/build.gradle` now forces Android subprojects to compile with Java 17. The release build succeeded with that override.
+
+## Build release locally
+
+### Prerequisites
+
+- Android SDK installed
+- Java 17+ available
+- Bun available, or use `npx bun ...` as shown below
+
+If `android/local.properties` is missing, set:
+
+```properties
+sdk.dir=C\:\\Users\\<your-user>\\AppData\\Local\\Android\\Sdk
+```
+
+### Build commands
+
+Standard flow:
+
+```bash
+bun install
+bun run build
+bun x cap sync android
+cd android
+./gradlew assembleRelease
+```
+
+Windows-friendly flow used in this workspace:
+
+```powershell
+npx bun install
+npx bun run build
+npx bun -e "process.argv=['bun','cap','sync','android']; require('./node_modules/@capacitor/cli/dist/index').run();"
+cd android
+.\gradlew.bat assembleRelease --console=plain
+```
+
+Output built here:
+
+- `android/app/build/outputs/apk/release/app-release-unsigned.apk`
+
+## Sign the APK with your own key
+
+Example flow:
+
+```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\build-tools\35.0.0\zipalign.exe" -f 4 `
+  "android\app\build\outputs\apk\release\app-release-unsigned.apk" `
+  "android\app\build\outputs\apk\release\app-release-aligned.apk"
+
+& "$env:LOCALAPPDATA\Android\Sdk\build-tools\35.0.0\apksigner.bat" sign `
+  --ks C:\path\to\your-upload-key.jks `
+  --out "android\app\build\outputs\apk\release\app-release-signed.apk" `
+  "android\app\build\outputs\apk\release\app-release-aligned.apk"
+```
+
+You can also provide signing env vars before `assembleRelease`:
+
+```powershell
+$env:JUSTAGRAM_UPLOAD_STORE_FILE="C:\path\to\your-upload-key.jks"
+$env:JUSTAGRAM_UPLOAD_STORE_PASSWORD="..."
+$env:JUSTAGRAM_UPLOAD_KEY_ALIAS="..."
+$env:JUSTAGRAM_UPLOAD_KEY_PASSWORD="..."
+```
+
+Then rebuild:
+
+```powershell
+cd android
+.\gradlew.bat assembleRelease --console=plain
+```
+
+## Verify package, permissions, and signature
+
+Package id:
+
+```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\cmdline-tools\latest\bin\apkanalyzer.bat" manifest application-id `
+  "android\app\build\outputs\apk\release\app-release-unsigned.apk"
+```
+
+Permissions:
+
+```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\cmdline-tools\latest\bin\apkanalyzer.bat" manifest permissions `
+  "android\app\build\outputs\apk\release\app-release-unsigned.apk"
+```
+
+Manifest hardening flags:
+
+```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\cmdline-tools\latest\bin\apkanalyzer.bat" manifest print `
+  "android\app\build\outputs\apk\release\app-release-unsigned.apk" | Select-String "allowBackup|usesCleartextTraffic|debuggable"
+```
+
+Signature verification:
+
+```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\build-tools\35.0.0\apksigner.bat" verify --verbose --print-certs `
+  "android\app\build\outputs\apk\release\app-release-signed.apk"
+```
+
+Current unsigned artifact check:
+
+- `app-release-unsigned.apk` correctly fails signature verification until you sign it
+
+## Manual validation checklist
+
+- Launch the app and confirm it opens into login or Direct, not Home
+- Log in and confirm the app lands on Direct inbox
+- Open a DM thread
+- Open a reel shared in DM
+- Confirm the reel itself plays or renders
+- Try swiping, scrolling, PageDown, or moving to the next reel
+- Confirm the app keeps you on the current item or returns you to Direct instead of continuing infinitely
+- Open a post shared in DM
+- Confirm the post renders
+- Confirm related "more posts" navigation is hidden or disabled
+- Open a story link or highlight link explicitly
+- Confirm the current story opens
+- Confirm discovery routes do not remain usable
+- Confirm Home, Explore, and Reels entry points are hidden or bounce back to Direct
+- Confirm login still works
+- Confirm useful routes such as Direct conversations and basic profile/create flows still open
+
+## Residual risks
+
+- This is still a wrapper around Instagram web with code injection. That is inherently higher risk than using a first-party app with no wrapper.
+- The third-party InAppBrowser fork still contains powerful capabilities such as injected messaging and beforeload support in its source. The app no longer enables those paths, but the capability remains present in the dependency.
+- Instagram can change DOM or SPA routing at any time. The current implementation prefers route-based controls and safe redirects, but some future UI changes may weaken the viewer lock until updated.
+- Story progression can be harder to freeze perfectly than posts/reels because Instagram may keep some progression inside the same story route.
+- If you follow profile links manually, you can still browse profile grids. The fork blocks infinite discovery paths, but it does not attempt to turn every profile into a blank page.
+- The generated Android dynamic receiver permission is expected, but the final installed package still depends on Android, Capacitor, and the plugin stack behaving as shipped.

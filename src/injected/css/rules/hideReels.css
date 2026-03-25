@@ -1,9 +1,0 @@
-a[href="/reels/"],
-a[href*="reels"],
-a:has(svg[aria-label*="Reels"]),
-nav a[href*="/reels/"],
-div[role="tablist"] a[href*="/reels/"],
-svg[aria-label="Reels"],
-svg[aria-label*="Reels"] {
-  display: none !important;
-}
