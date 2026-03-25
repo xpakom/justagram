@@ -6,7 +6,7 @@
     version: string;
   };
 
-  type UtilityMode = "utility" | "viewer" | "blocked";
+  type UtilityMode = "utility" | "viewer";
 
   type ViewerSession = {
     initialPath: string;
@@ -34,9 +34,12 @@
   const activeConfig = runtimeConfig;
   const DEFAULT_RETURN_PATH = normalizePath(activeConfig.initialRoute);
   const STYLE_ID = "justagram-utility-style";
-  const GUARD_ID = "justagram-utility-guard";
-  const BLOCKED_ROUTE_PATTERNS = [
-    /^\/$/,
+  const VIEWER_BAR_ID = "justagram-utility-viewer-bar";
+  const EMPTY_STATE_ID = "justagram-utility-empty-state";
+  const BLANK_MASK_REASON = "blank";
+  const NAV_MASK_REASON = "nav";
+  const HOME_ROUTE = /^\/$/;
+  const BLANK_ROUTE_PATTERNS = [
     /^\/explore(?:\/|$)/,
     /^\/reels\/audio(?:\/|$)/,
   ];
@@ -50,8 +53,6 @@
     " ",
   ]);
   const BLOCKED_NAV_LABELS = [
-    "home",
-    "inicio",
     "explore",
     "buscar",
     "search",
@@ -84,8 +85,12 @@
     }
   }
 
-  function isBlockedRoute(path: string): boolean {
-    return BLOCKED_ROUTE_PATTERNS.some((pattern) => pattern.test(path));
+  function isHomeRoute(path: string): boolean {
+    return HOME_ROUTE.test(path);
+  }
+
+  function isBlankRoute(path: string): boolean {
+    return BLANK_ROUTE_PATTERNS.some((pattern) => pattern.test(path));
   }
 
   function isViewerRoute(path: string): boolean {
@@ -93,12 +98,8 @@
       /(?:^|\/)reel\/[^/]+\/?$/.test(path) ||
       /(?:^|\/)p\/[^/]+\/?$/.test(path) ||
       path.startsWith("/stories/") ||
-      /^\/reels(?:\/|$)/.test(path)
+      /^\/reels(?:\/[^/]+)?\/?$/.test(path)
     );
-  }
-
-  function isUtilityRoute(path: string): boolean {
-    return !isBlockedRoute(path) && !isViewerRoute(path);
   }
 
   function registerCleanup(callback: () => void): void {
@@ -120,8 +121,10 @@
       }
     }
 
+    restoreMaskedElements(BLANK_MASK_REASON);
     document.getElementById(STYLE_ID)?.remove();
-    document.getElementById(GUARD_ID)?.remove();
+    document.getElementById(VIEWER_BAR_ID)?.remove();
+    document.getElementById(EMPTY_STATE_ID)?.remove();
     delete document.documentElement.dataset.justagramMode;
     if (document.body) {
       delete document.body.dataset.justagramMode;
@@ -132,17 +135,26 @@
     }
   }
 
-  function hideElement(element: Element | null): void {
+  function maskElement(element: Element | null, reason: string): void {
     if (!element || !(element instanceof HTMLElement)) {
       return;
     }
 
-    if (element.id === GUARD_ID) {
+    if (element.id === EMPTY_STATE_ID || element.id === VIEWER_BAR_ID) {
       return;
     }
 
     element.style.setProperty("display", "none", "important");
-    element.setAttribute("data-justagram-hidden", "true");
+    element.dataset.justagramHidden = reason;
+  }
+
+  function restoreMaskedElements(reason: string): void {
+    document
+      .querySelectorAll<HTMLElement>(`[data-justagram-hidden="${reason}"]`)
+      .forEach((element) => {
+        element.style.removeProperty("display");
+        delete element.dataset.justagramHidden;
+      });
   }
 
   function injectBaseStyles(): void {
@@ -154,94 +166,55 @@
     style.id = STYLE_ID;
     style.textContent = `
       html[data-justagram-mode="viewer"],
-      html[data-justagram-mode="blocked"],
-      body[data-justagram-mode="viewer"],
-      body[data-justagram-mode="blocked"] {
+      body[data-justagram-mode="viewer"] {
         overscroll-behavior: none !important;
       }
 
-      #${GUARD_ID} {
+      #${VIEWER_BAR_ID} {
         position: fixed;
-        inset: 0;
+        left: 12px;
+        right: 12px;
+        bottom: 16px;
         z-index: 2147483646;
         display: none;
-        pointer-events: none;
-      }
-
-      #${GUARD_ID}[data-visible="true"] {
-        display: flex;
-        pointer-events: auto;
-      }
-
-      #${GUARD_ID}[data-mode="viewer"] {
-        align-items: flex-end;
-        justify-content: center;
-        padding: 18px 12px 20px;
-        background:
-          linear-gradient(to top, rgba(10, 10, 10, 0.34), rgba(10, 10, 10, 0));
-      }
-
-      #${GUARD_ID}[data-mode="blocked"] {
         align-items: center;
-        justify-content: center;
-        padding: 24px 18px;
-        background: rgba(10, 10, 10, 0.84);
-      }
-
-      #${GUARD_ID} .justagram-panel {
-        width: min(100%, 560px);
-        border-radius: 16px;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 14px;
         border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 16px;
         background: rgba(16, 16, 16, 0.94);
         color: #ffffff;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
       }
 
-      #${GUARD_ID}[data-mode="viewer"] .justagram-panel {
-        padding: 12px 14px;
+      #${VIEWER_BAR_ID}[data-visible="true"] {
+        display: flex;
       }
 
-      #${GUARD_ID}[data-mode="blocked"] .justagram-panel {
-        padding: 18px 18px 16px;
+      #${VIEWER_BAR_ID} .justagram-copy {
+        min-width: 0;
+        font-size: 13px;
+        line-height: 1.45;
+        color: rgba(255, 255, 255, 0.88);
       }
 
-      #${GUARD_ID} .justagram-title {
+      #${VIEWER_BAR_ID} .justagram-title {
         display: block;
         margin-bottom: 4px;
         font-size: 15px;
         font-weight: 700;
+        color: #ffffff;
       }
 
-      #${GUARD_ID} .justagram-copy {
-        font-size: 13px;
-        line-height: 1.45;
-        color: rgba(255, 255, 255, 0.86);
-      }
-
-      #${GUARD_ID}[data-mode="viewer"] .justagram-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-      }
-
-      #${GUARD_ID}[data-mode="viewer"] .justagram-copy {
-        min-width: 0;
-      }
-
-      #${GUARD_ID} .justagram-actions {
+      #${VIEWER_BAR_ID} .justagram-actions {
         display: flex;
         gap: 10px;
         flex-wrap: wrap;
-        margin-top: 14px;
       }
 
-      #${GUARD_ID}[data-mode="viewer"] .justagram-actions {
-        margin-top: 0;
-      }
-
-      #${GUARD_ID} button {
+      #${VIEWER_BAR_ID} button {
         border: 0;
         border-radius: 999px;
         padding: 10px 14px;
@@ -249,151 +222,138 @@
         font-weight: 600;
       }
 
-      #${GUARD_ID} button[data-action="back"] {
+      #${VIEWER_BAR_ID} button[data-action="back"] {
         background: #ffffff;
         color: #111111;
       }
 
-      #${GUARD_ID} button[data-action="direct"] {
+      #${VIEWER_BAR_ID} button[data-action="direct"] {
         background: rgba(255, 255, 255, 0.08);
         color: #ffffff;
       }
+
+      #${EMPTY_STATE_ID} {
+        margin: 24px auto;
+        max-width: 560px;
+        padding: 20px 18px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 18px;
+        background: rgba(16, 16, 16, 0.92);
+        color: #ffffff;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.3);
+      }
+
+      #${EMPTY_STATE_ID} .justagram-title {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 16px;
+        font-weight: 700;
+      }
+
+      #${EMPTY_STATE_ID} .justagram-copy {
+        font-size: 14px;
+        line-height: 1.5;
+        color: rgba(255, 255, 255, 0.88);
+      }
     `;
+
     document.head.appendChild(style);
   }
 
-  function ensureGuard(): HTMLDivElement {
+  function ensureViewerBar(): HTMLDivElement {
     injectBaseStyles();
 
-    let guard = document.getElementById(GUARD_ID) as HTMLDivElement | null;
-    if (!guard) {
-      guard = document.createElement("div");
-      guard.id = GUARD_ID;
-      guard.innerHTML = '<div class="justagram-panel"></div>';
-
-      const swallowPointer = (event: Event) => {
-        if (currentMode === "utility") {
-          return;
-        }
-
-        const target = event.target instanceof HTMLElement ? event.target : null;
-        if (target?.closest("button")) {
-          return;
-        }
-
-        event.preventDefault();
-        event.stopPropagation();
-      };
-
-      guard.addEventListener("click", swallowPointer, true);
-      guard.addEventListener("pointerdown", swallowPointer, true);
-      guard.addEventListener(
-        "touchstart",
-        (event) => {
-          if (currentMode !== "utility") {
-            event.preventDefault();
-          }
-        },
-        { capture: true, passive: false }
-      );
-      guard.addEventListener(
-        "touchmove",
-        (event) => {
-          if (currentMode !== "utility") {
-            event.preventDefault();
-          }
-        },
-        { capture: true, passive: false }
-      );
-      guard.addEventListener(
-        "wheel",
-        (event) => {
-          if (currentMode !== "utility") {
-            event.preventDefault();
-          }
-        },
-        { capture: true, passive: false }
-      );
-
-      document.body.appendChild(guard);
+    let bar = document.getElementById(VIEWER_BAR_ID) as HTMLDivElement | null;
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.id = VIEWER_BAR_ID;
+      document.body.appendChild(bar);
     }
 
-    return guard;
+    return bar;
   }
 
-  function renderGuard(mode: UtilityMode): void {
-    const guard = ensureGuard();
-    const panel = guard.querySelector(".justagram-panel") as HTMLDivElement | null;
-    if (!panel) {
+  function renderViewerBar(visible: boolean): void {
+    const bar = ensureViewerBar();
+    if (!visible) {
+      bar.dataset.visible = "false";
+      bar.replaceChildren();
       return;
     }
 
-    if (mode === "utility") {
-      guard.dataset.visible = "false";
-      delete guard.dataset.mode;
-      panel.replaceChildren();
-      return;
-    }
+    bar.dataset.visible = "true";
+    bar.innerHTML = `
+      <div class="justagram-copy">
+        <span class="justagram-title">Utility mode</span>
+        <span>You can view the current item, but swipe-style continuation stays blocked.</span>
+      </div>
+      <div class="justagram-actions">
+        <button type="button" data-action="back">Back</button>
+        <button type="button" data-action="direct">Direct</button>
+      </div>
+    `;
 
-    guard.dataset.visible = "true";
-    guard.dataset.mode = mode;
-
-    if (mode === "viewer") {
-      panel.innerHTML = `
-        <div class="justagram-row">
-          <div class="justagram-copy">
-            <span class="justagram-title">Utility mode</span>
-            <span>You can view this item, but gestures and onward discovery stay blocked.</span>
-          </div>
-          <div class="justagram-actions">
-            <button type="button" data-action="back">Back</button>
-            <button type="button" data-action="direct">Direct</button>
-          </div>
-        </div>
-      `;
-    } else {
-      panel.innerHTML = `
-        <div class="justagram-copy">
-          <span class="justagram-title">Feed blocked</span>
-          <span>This route is intentionally disabled to keep the app focused on messaging and explicit shares.</span>
-        </div>
-        <div class="justagram-actions">
-          <button type="button" data-action="back">Go back</button>
-          <button type="button" data-action="direct">Open Direct</button>
-        </div>
-      `;
-    }
-
-    panel.querySelector<HTMLButtonElement>('button[data-action="back"]')?.addEventListener("click", () => {
-      navigateTo(mode === "viewer" ? viewerSession?.returnPath ?? lastUtilityPath : lastUtilityPath);
+    bar.querySelector<HTMLButtonElement>('button[data-action="back"]')?.addEventListener("click", () => {
+      navigateTo(viewerSession?.returnPath ?? lastUtilityPath);
     });
 
-    panel.querySelector<HTMLButtonElement>('button[data-action="direct"]')?.addEventListener("click", () => {
+    bar.querySelector<HTMLButtonElement>('button[data-action="direct"]')?.addEventListener("click", () => {
       navigateTo(DEFAULT_RETURN_PATH);
     });
+  }
+
+  function clearEmptyState(): void {
+    restoreMaskedElements(BLANK_MASK_REASON);
+    document.getElementById(EMPTY_STATE_ID)?.remove();
+  }
+
+  function applyEmptyState(kind: "home" | "explore"): void {
+    clearEmptyState();
+    injectBaseStyles();
+
+    const main = document.querySelector("main") as HTMLElement | null;
+    if (!main) {
+      return;
+    }
+
+    Array.from(main.children).forEach((child) => {
+      maskElement(child, BLANK_MASK_REASON);
+    });
+
+    const panel = document.createElement("div");
+    panel.id = EMPTY_STATE_ID;
+    panel.innerHTML = `
+      <span class="justagram-title">${kind === "home" ? "Home feed hidden" : "Discovery hidden"}</span>
+      <div class="justagram-copy">
+        ${
+          kind === "home"
+            ? "The feed route stays available for utility navigation, but posts, stories, and endless recommendations are removed."
+            : "Explore-style discovery stays disabled in this build."
+        }
+      </div>
+    `;
+    main.appendChild(panel);
   }
 
   function setMode(mode: UtilityMode): void {
     currentMode = mode;
     document.documentElement.dataset.justagramMode = mode;
     document.body.dataset.justagramMode = mode;
-    renderGuard(mode);
+    renderViewerBar(mode === "viewer");
   }
 
-  function stripGlobalDiscoveryEntrypoints(): void {
+  function stripLimitedNavEntrypoints(): void {
     const navSelectors = [
-      'nav a[href="/"]',
       'nav a[href="/explore/"]',
       'nav a[href="/reels/"]',
-      '[role="tablist"] a[href="/"]',
       '[role="tablist"] a[href="/explore/"]',
       '[role="tablist"] a[href="/reels/"]',
       'a[href*="threads.com"]',
-      'a[href*="/stories/highlights/"]',
     ];
 
     document.querySelectorAll(navSelectors.join(",")).forEach((element) => {
-      hideElement(element.closest("a, button") ?? element);
+      maskElement(element.closest("a, button") ?? element, NAV_MASK_REASON);
     });
 
     document
@@ -409,22 +369,20 @@
           .toLowerCase();
 
         if (BLOCKED_NAV_LABELS.some((entry) => label.includes(entry))) {
-          hideElement(button);
+          maskElement(button, NAV_MASK_REASON);
         }
       });
   }
 
   function sanitizeUtilityDom(): void {
+    clearEmptyState();
     setMode("utility");
-    stripGlobalDiscoveryEntrypoints();
-
-    document.querySelectorAll<HTMLAnchorElement>('a[href*="threads.com"]').forEach((anchor) => {
-      hideElement(anchor);
-    });
+    stripLimitedNavEntrypoints();
   }
 
   function sanitizeViewerDom(path: string): void {
-    if (!viewerSession) {
+    clearEmptyState();
+    if (!viewerSession || viewerSession.initialPath !== path) {
       viewerSession = {
         initialPath: path,
         returnPath: lastUtilityPath,
@@ -432,13 +390,21 @@
     }
 
     setMode("viewer");
-    stripGlobalDiscoveryEntrypoints();
   }
 
-  function sanitizeBlockedDom(): void {
+  function sanitizeHomeDom(): void {
     viewerSession = null;
-    setMode("blocked");
-    stripGlobalDiscoveryEntrypoints();
+    lastUtilityPath = "/";
+    setMode("utility");
+    stripLimitedNavEntrypoints();
+    applyEmptyState("home");
+  }
+
+  function sanitizeBlankRouteDom(): void {
+    viewerSession = null;
+    setMode("utility");
+    stripLimitedNavEntrypoints();
+    applyEmptyState("explore");
   }
 
   function queueSanitize(): void {
@@ -467,19 +433,24 @@
   function applyRoutePolicy(): void {
     const path = normalizePath(window.location.pathname);
 
+    if (isHomeRoute(path)) {
+      sanitizeHomeDom();
+      return;
+    }
+
+    if (isBlankRoute(path)) {
+      sanitizeBlankRouteDom();
+      return;
+    }
+
     if (isViewerRoute(path)) {
       sanitizeViewerDom(path);
       return;
     }
 
     viewerSession = null;
-    if (isUtilityRoute(path)) {
-      lastUtilityPath = path;
-      sanitizeUtilityDom();
-      return;
-    }
-
-    sanitizeBlockedDom();
+    lastUtilityPath = path;
+    sanitizeUtilityDom();
   }
 
   function isEditableTarget(target: EventTarget | null): boolean {
@@ -513,7 +484,7 @@
     };
 
     const keydownHandler = (event: KeyboardEvent) => {
-      if (currentMode === "utility" || isEditableTarget(event.target)) {
+      if (currentMode !== "viewer" || isEditableTarget(event.target)) {
         return;
       }
 
@@ -522,12 +493,35 @@
       }
     };
 
+    const motionHandler = (event: Event) => {
+      if (currentMode !== "viewer") {
+        return;
+      }
+
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      if (target?.closest(`#${VIEWER_BAR_ID}`)) {
+        return;
+      }
+
+      event.preventDefault();
+    };
+
     document.addEventListener("click", clickHandler, true);
     document.addEventListener("keydown", keydownHandler, true);
+    document.addEventListener("wheel", motionHandler, {
+      capture: true,
+      passive: false,
+    });
+    document.addEventListener("touchmove", motionHandler, {
+      capture: true,
+      passive: false,
+    });
 
     registerCleanup(() => {
       document.removeEventListener("click", clickHandler, true);
       document.removeEventListener("keydown", keydownHandler, true);
+      document.removeEventListener("wheel", motionHandler, true);
+      document.removeEventListener("touchmove", motionHandler, true);
     });
   }
 
@@ -536,13 +530,19 @@
     const originalReplaceState = history.replaceState;
 
     history.pushState = function pushState(...args) {
-      const result = originalPushState.apply(this, args as Parameters<History["pushState"]>);
+      const result = originalPushState.apply(
+        this,
+        args as Parameters<History["pushState"]>
+      );
       queueMicrotask(queueSanitize);
       return result;
     };
 
     history.replaceState = function replaceState(...args) {
-      const result = originalReplaceState.apply(this, args as Parameters<History["replaceState"]>);
+      const result = originalReplaceState.apply(
+        this,
+        args as Parameters<History["replaceState"]>
+      );
       queueMicrotask(queueSanitize);
       return result;
     };
