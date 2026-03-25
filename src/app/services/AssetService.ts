@@ -24,9 +24,9 @@ export class AssetService {
         injectedScript: await response.text(),
       };
     } catch (error) {
-      console.error("[JustAgram] Failed to load assets", error);
+      console.error("[DistractionFreeDMs] Failed to load assets", error);
       alert(
-        "Failed to load JustAgram assets. The app may not function correctly."
+        "Failed to load Distraction Free DMs assets. The app may not function correctly."
       );
       return null;
     }

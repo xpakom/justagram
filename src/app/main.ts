@@ -8,25 +8,17 @@ if (typeof cordova !== 'undefined') {
   document.addEventListener("deviceready", onDeviceReady, false);
 } else {
   // Fallback for browser testing
-  console.log("[JustAgram] Running in browser mode (No Cordova)");
+  console.log("[DistractionFreeDMs] Running in browser mode (No Cordova)");
   // Small delay to ensure DOM is ready
   setTimeout(onDeviceReady, 500);
 }
 
 async function onDeviceReady(): Promise<void> {
-  console.log("Device ready - Launching JustAgram");
+  console.log("Device ready - Launching Distraction Free DMs");
 
   await ThemeService.init();
 
   const data = await AssetService.loadAssets();
 
-  const launchBtn = document.getElementById("launch-btn");
-  if (launchBtn) {
-    launchBtn.addEventListener("click", () => {
-      BrowserService.open(data);
-    });
-  }
-
   await BrowserService.open(data);
-  ThemeService.enableButtons();
 }

@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'com.paco.justagram.utility',
-  appName: 'JustAgram Utility',
+  appName: 'Distraction Free DMs',
   webDir: 'www',
 };
 

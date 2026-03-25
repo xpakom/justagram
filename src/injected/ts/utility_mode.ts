@@ -6,15 +6,19 @@
     version: string;
   };
 
-  type UtilityMode = "utility" | "viewer";
-
-  type ViewerSession = {
-    initialPath: string;
-    returnPath: string;
-  };
-
   type RuntimeHandle = {
     cleanup(): void;
+  };
+
+  type PendingViewer = {
+    at: number;
+    sourcePath: string;
+  };
+
+  type ViewerSession = {
+    path: string;
+    returnPath: string;
+    flexibleUntil: number;
   };
 
   type RuntimeWindow = Window & {
@@ -27,22 +31,21 @@
 
   const runtimeConfig = runtimeWindow.__JUSTAGRAM_CONFIG__;
   if (!runtimeConfig) {
-    console.error("[JustAgram] Utility mode config is missing");
+    console.error("[DistractionFreeDMs] Utility mode config is missing");
     return;
   }
 
   const activeConfig = runtimeConfig;
   const DEFAULT_RETURN_PATH = normalizePath(activeConfig.initialRoute);
+  const STORAGE_LAST_DIRECT_KEY = "justagram.lastDirectPath";
+  const STORAGE_PENDING_VIEWER_KEY = "justagram.pendingViewer";
+  const STORAGE_ACTIVE_VIEWER_KEY = "justagram.activeViewer";
   const STYLE_ID = "justagram-utility-style";
   const VIEWER_BAR_ID = "justagram-utility-viewer-bar";
-  const EMPTY_STATE_ID = "justagram-utility-empty-state";
-  const BLANK_MASK_REASON = "blank";
-  const NAV_MASK_REASON = "nav";
-  const HOME_ROUTE = /^\/$/;
-  const BLANK_ROUTE_PATTERNS = [
-    /^\/explore(?:\/|$)/,
-    /^\/reels\/audio(?:\/|$)/,
-  ];
+  const HIDDEN_NAV_REASON = "nav";
+  const DISABLED_LINK_REASON = "direct-link";
+  const VIEWER_PENDING_TTL_MS = 15000;
+  const VIEWER_CANONICALIZATION_TTL_MS = 5000;
   const BLOCKED_KEYBOARD_KEYS = new Set([
     "ArrowDown",
     "ArrowUp",
@@ -52,19 +55,28 @@
     "End",
     " ",
   ]);
-  const BLOCKED_NAV_LABELS = [
-    "explore",
-    "buscar",
-    "search",
-    "reels",
+  const AUTH_ROUTE_PATTERNS = [
+    /^\/accounts(?:\/|$)/,
+    /^\/challenge(?:\/|$)/,
+    /^\/checkpoint(?:\/|$)/,
+    /^\/session(?:\/|$)/,
+    /^\/two_factor(?:\/|$)/,
+    /^\/consent(?:\/|$)/,
   ];
+  const DIRECT_ROUTE_PATTERN = /^\/direct(?:\/|$)/;
+  const STRICT_VIEWER_PATTERNS = [
+    /^\/reel\/[^/]+\/?$/,
+    /^\/[^/]+\/reel\/[^/]+\/?$/,
+    /^\/p\/[^/]+\/?$/,
+    /^\/stories\/[^/].*$/,
+    /^\/reels\/[^/]+\/?$/,
+  ];
+  const TRANSIENT_VIEWER_PATTERNS = [/^\/reels\/?$/];
 
   let observer: MutationObserver | null = null;
   let sanitizeQueued = false;
-  let currentMode: UtilityMode = "utility";
   let viewerSession: ViewerSession | null = null;
-  let lastUtilityPath = DEFAULT_RETURN_PATH;
-
+  let lastDirectPath = readStoredString(STORAGE_LAST_DIRECT_KEY) ?? DEFAULT_RETURN_PATH;
   const cleanupCallbacks: Array<() => void> = [];
 
   runtimeWindow.__JUSTAGRAM_UTILITY_RUNTIME__ = {
@@ -85,21 +97,95 @@
     }
   }
 
-  function isHomeRoute(path: string): boolean {
-    return HOME_ROUTE.test(path);
+  function readStoredString(key: string): string | null {
+    try {
+      return window.sessionStorage.getItem(key);
+    } catch {
+      return null;
+    }
   }
 
-  function isBlankRoute(path: string): boolean {
-    return BLANK_ROUTE_PATTERNS.some((pattern) => pattern.test(path));
+  function writeStoredString(key: string, value: string): void {
+    try {
+      window.sessionStorage.setItem(key, value);
+    } catch {
+      // Ignore storage failures in private/ephemeral contexts.
+    }
   }
 
-  function isViewerRoute(path: string): boolean {
-    return (
-      /(?:^|\/)reel\/[^/]+\/?$/.test(path) ||
-      /(?:^|\/)p\/[^/]+\/?$/.test(path) ||
-      path.startsWith("/stories/") ||
-      /^\/reels(?:\/[^/]+)?\/?$/.test(path)
-    );
+  function removeStoredValue(key: string): void {
+    try {
+      window.sessionStorage.removeItem(key);
+    } catch {
+      // Ignore storage failures.
+    }
+  }
+
+  function readStoredJson<T>(key: string): T | null {
+    const raw = readStoredString(key);
+    if (!raw) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(raw) as T;
+    } catch {
+      removeStoredValue(key);
+      return null;
+    }
+  }
+
+  function writeStoredJson<T>(key: string, value: T): void {
+    writeStoredString(key, JSON.stringify(value));
+  }
+
+  function isAuthRoute(path: string): boolean {
+    return AUTH_ROUTE_PATTERNS.some((pattern) => pattern.test(path));
+  }
+
+  function isDirectRoute(path: string): boolean {
+    return DIRECT_ROUTE_PATTERN.test(path);
+  }
+
+  function isStrictViewerRoute(path: string): boolean {
+    return STRICT_VIEWER_PATTERNS.some((pattern) => pattern.test(path));
+  }
+
+  function isTransientViewerRoute(path: string): boolean {
+    return TRANSIENT_VIEWER_PATTERNS.some((pattern) => pattern.test(path));
+  }
+
+  function isViewerCandidateRoute(path: string): boolean {
+    return isStrictViewerRoute(path) || isTransientViewerRoute(path);
+  }
+
+  function isExternalHref(href: string | null | undefined): boolean {
+    if (!href) {
+      return false;
+    }
+
+    try {
+      const url = new URL(href, window.location.origin);
+      return url.origin !== window.location.origin;
+    } catch {
+      return false;
+    }
+  }
+
+  function getPathFromHref(href: string | null | undefined): string {
+    if (!href) {
+      return "";
+    }
+
+    try {
+      const url = new URL(href, window.location.origin);
+      if (url.origin !== window.location.origin) {
+        return "";
+      }
+      return normalizePath(url.pathname);
+    } catch {
+      return "";
+    }
   }
 
   function registerCleanup(callback: () => void): void {
@@ -117,14 +203,14 @@
       try {
         callback?.();
       } catch (error) {
-        console.warn("[JustAgram] Cleanup callback failed", error);
+        console.warn("[DistractionFreeDMs] Cleanup callback failed", error);
       }
     }
 
-    restoreMaskedElements(BLANK_MASK_REASON);
+    restoreMaskedElements(HIDDEN_NAV_REASON);
+    restoreDisabledInteractions(DISABLED_LINK_REASON);
     document.getElementById(STYLE_ID)?.remove();
     document.getElementById(VIEWER_BAR_ID)?.remove();
-    document.getElementById(EMPTY_STATE_ID)?.remove();
     delete document.documentElement.dataset.justagramMode;
     if (document.body) {
       delete document.body.dataset.justagramMode;
@@ -140,7 +226,7 @@
       return;
     }
 
-    if (element.id === EMPTY_STATE_ID || element.id === VIEWER_BAR_ID) {
+    if (element.id === VIEWER_BAR_ID) {
       return;
     }
 
@@ -154,6 +240,41 @@
       .forEach((element) => {
         element.style.removeProperty("display");
         delete element.dataset.justagramHidden;
+      });
+  }
+
+  function disableElementInteraction(
+    element: Element | null,
+    reason: string
+  ): void {
+    if (!element || !(element instanceof HTMLElement)) {
+      return;
+    }
+
+    if (element.id === VIEWER_BAR_ID) {
+      return;
+    }
+
+    element.style.setProperty("pointer-events", "none", "important");
+    element.style.setProperty("cursor", "default", "important");
+    element.dataset.justagramDisabled = reason;
+    if (element instanceof HTMLAnchorElement) {
+      element.setAttribute("tabindex", "-1");
+      element.setAttribute("aria-disabled", "true");
+    }
+  }
+
+  function restoreDisabledInteractions(reason: string): void {
+    document
+      .querySelectorAll<HTMLElement>(`[data-justagram-disabled="${reason}"]`)
+      .forEach((element) => {
+        element.style.removeProperty("pointer-events");
+        element.style.removeProperty("cursor");
+        delete element.dataset.justagramDisabled;
+        if (element instanceof HTMLAnchorElement) {
+          element.removeAttribute("tabindex");
+          element.removeAttribute("aria-disabled");
+        }
       });
   }
 
@@ -172,40 +293,27 @@
 
       #${VIEWER_BAR_ID} {
         position: fixed;
-        left: 12px;
-        right: 12px;
+        left: 50%;
         bottom: 16px;
         z-index: 2147483646;
         display: none;
         align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 12px 14px;
+        justify-content: center;
+        gap: 10px;
+        transform: translateX(-50%);
+        width: auto;
+        max-width: calc(100vw - 24px);
+        padding: 10px 12px;
         border: 1px solid rgba(255, 255, 255, 0.14);
-        border-radius: 16px;
+        border-radius: 999px;
         background: rgba(16, 16, 16, 0.94);
         color: #ffffff;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
+        box-shadow: 0 14px 36px rgba(0, 0, 0, 0.42);
       }
 
       #${VIEWER_BAR_ID}[data-visible="true"] {
         display: flex;
-      }
-
-      #${VIEWER_BAR_ID} .justagram-copy {
-        min-width: 0;
-        font-size: 13px;
-        line-height: 1.45;
-        color: rgba(255, 255, 255, 0.88);
-      }
-
-      #${VIEWER_BAR_ID} .justagram-title {
-        display: block;
-        margin-bottom: 4px;
-        font-size: 15px;
-        font-weight: 700;
-        color: #ffffff;
       }
 
       #${VIEWER_BAR_ID} .justagram-actions {
@@ -225,36 +333,6 @@
       #${VIEWER_BAR_ID} button[data-action="back"] {
         background: #ffffff;
         color: #111111;
-      }
-
-      #${VIEWER_BAR_ID} button[data-action="direct"] {
-        background: rgba(255, 255, 255, 0.08);
-        color: #ffffff;
-      }
-
-      #${EMPTY_STATE_ID} {
-        margin: 24px auto;
-        max-width: 560px;
-        padding: 20px 18px;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 18px;
-        background: rgba(16, 16, 16, 0.92);
-        color: #ffffff;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.3);
-      }
-
-      #${EMPTY_STATE_ID} .justagram-title {
-        display: block;
-        margin-bottom: 6px;
-        font-size: 16px;
-        font-weight: 700;
-      }
-
-      #${EMPTY_STATE_ID} .justagram-copy {
-        font-size: 14px;
-        line-height: 1.5;
-        color: rgba(255, 255, 255, 0.88);
       }
     `;
 
@@ -284,127 +362,149 @@
 
     bar.dataset.visible = "true";
     bar.innerHTML = `
-      <div class="justagram-copy">
-        <span class="justagram-title">Utility mode</span>
-        <span>You can view the current item, but swipe-style continuation stays blocked.</span>
-      </div>
       <div class="justagram-actions">
-        <button type="button" data-action="back">Back</button>
-        <button type="button" data-action="direct">Direct</button>
+        <button type="button" data-action="back">Back to messages</button>
       </div>
     `;
 
     bar.querySelector<HTMLButtonElement>('button[data-action="back"]')?.addEventListener("click", () => {
-      navigateTo(viewerSession?.returnPath ?? lastUtilityPath);
-    });
-
-    bar.querySelector<HTMLButtonElement>('button[data-action="direct"]')?.addEventListener("click", () => {
-      navigateTo(DEFAULT_RETURN_PATH);
+      navigateTo(viewerSession?.returnPath ?? lastDirectPath);
     });
   }
 
-  function clearEmptyState(): void {
-    restoreMaskedElements(BLANK_MASK_REASON);
-    document.getElementById(EMPTY_STATE_ID)?.remove();
-  }
-
-  function applyEmptyState(kind: "home" | "explore"): void {
-    clearEmptyState();
-    injectBaseStyles();
-
-    const main = document.querySelector("main") as HTMLElement | null;
-    if (!main) {
-      return;
-    }
-
-    Array.from(main.children).forEach((child) => {
-      maskElement(child, BLANK_MASK_REASON);
-    });
-
-    const panel = document.createElement("div");
-    panel.id = EMPTY_STATE_ID;
-    panel.innerHTML = `
-      <span class="justagram-title">${kind === "home" ? "Home feed hidden" : "Discovery hidden"}</span>
-      <div class="justagram-copy">
-        ${
-          kind === "home"
-            ? "The feed route stays available for utility navigation, but posts, stories, and endless recommendations are removed."
-            : "Explore-style discovery stays disabled in this build."
-        }
-      </div>
-    `;
-    main.appendChild(panel);
-  }
-
-  function setMode(mode: UtilityMode): void {
-    currentMode = mode;
+  function setMode(mode: "utility" | "viewer"): void {
     document.documentElement.dataset.justagramMode = mode;
     document.body.dataset.justagramMode = mode;
     renderViewerBar(mode === "viewer");
   }
 
-  function stripLimitedNavEntrypoints(): void {
-    const navSelectors = [
-      'nav a[href="/explore/"]',
-      'nav a[href="/reels/"]',
-      '[role="tablist"] a[href="/explore/"]',
-      '[role="tablist"] a[href="/reels/"]',
+  function hideGlobalNav(): void {
+    restoreMaskedElements(HIDDEN_NAV_REASON);
+
+    const selectors = [
+      "nav",
+      "[role='tablist']",
+      'a[href="/explore/"]',
+      'a[href="/reels/"]',
       'a[href*="threads.com"]',
+      'a[href="/"]',
+      'button[aria-label*="Home"]',
+      'button[aria-label*="Inicio"]',
+      'button[aria-label*="Explore"]',
+      'button[aria-label*="Buscar"]',
+      'button[aria-label*="Reels"]',
     ];
 
-    document.querySelectorAll(navSelectors.join(",")).forEach((element) => {
-      maskElement(element.closest("a, button") ?? element, NAV_MASK_REASON);
+    document.querySelectorAll(selectors.join(",")).forEach((element) => {
+      maskElement(element, HIDDEN_NAV_REASON);
     });
-
-    document
-      .querySelectorAll<HTMLElement>("nav button, [role='tablist'] button")
-      .forEach((button) => {
-        const label = [
-          button.getAttribute("aria-label"),
-          button.getAttribute("title"),
-          button.textContent,
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-
-        if (BLOCKED_NAV_LABELS.some((entry) => label.includes(entry))) {
-          maskElement(button, NAV_MASK_REASON);
-        }
-      });
   }
 
-  function sanitizeUtilityDom(): void {
-    clearEmptyState();
-    setMode("utility");
-    stripLimitedNavEntrypoints();
+  function persistLastDirectPath(path: string): void {
+    lastDirectPath = normalizePath(path);
+    writeStoredString(STORAGE_LAST_DIRECT_KEY, lastDirectPath);
   }
 
-  function sanitizeViewerDom(path: string): void {
-    clearEmptyState();
-    if (!viewerSession || viewerSession.initialPath !== path) {
-      viewerSession = {
-        initialPath: path,
-        returnPath: lastUtilityPath,
-      };
+  function clearPendingViewer(): void {
+    removeStoredValue(STORAGE_PENDING_VIEWER_KEY);
+  }
+
+  function storePendingViewer(): void {
+    const pending: PendingViewer = {
+      at: Date.now(),
+      sourcePath: lastDirectPath,
+    };
+    writeStoredJson(STORAGE_PENDING_VIEWER_KEY, pending);
+  }
+
+  function loadPendingViewer(): PendingViewer | null {
+    const pending = readStoredJson<PendingViewer>(STORAGE_PENDING_VIEWER_KEY);
+    if (!pending) {
+      return null;
     }
 
+    if (Date.now() - pending.at > VIEWER_PENDING_TTL_MS) {
+      clearPendingViewer();
+      return null;
+    }
+
+    return {
+      at: pending.at,
+      sourcePath: normalizePath(pending.sourcePath || lastDirectPath),
+    };
+  }
+
+  function clearActiveViewer(): void {
+    viewerSession = null;
+    removeStoredValue(STORAGE_ACTIVE_VIEWER_KEY);
+  }
+
+  function storeActiveViewer(session: ViewerSession): void {
+    viewerSession = session;
+    writeStoredJson(STORAGE_ACTIVE_VIEWER_KEY, session);
+  }
+
+  function loadActiveViewer(): ViewerSession | null {
+    const active = readStoredJson<ViewerSession>(STORAGE_ACTIVE_VIEWER_KEY);
+    if (!active) {
+      return null;
+    }
+
+    return {
+      path: normalizePath(active.path),
+      returnPath: normalizePath(active.returnPath || lastDirectPath),
+      flexibleUntil:
+        typeof active.flexibleUntil === "number" ? active.flexibleUntil : 0,
+    };
+  }
+
+  function sanitizeDirectDom(path: string): void {
+    persistLastDirectPath(path);
+    clearActiveViewer();
+    setMode("utility");
+    hideGlobalNav();
+    restoreDisabledInteractions(DISABLED_LINK_REASON);
+
+    document.querySelectorAll<HTMLAnchorElement>("a[href]").forEach((anchor) => {
+      if (anchor.closest(`#${VIEWER_BAR_ID}`)) {
+        return;
+      }
+
+      const href = anchor.getAttribute("href") ?? "";
+      const anchorPath = getPathFromHref(href);
+
+      if (isExternalHref(href)) {
+        disableElementInteraction(anchor, DISABLED_LINK_REASON);
+        return;
+      }
+
+      if (!anchorPath) {
+        return;
+      }
+
+      if (isDirectRoute(anchorPath) || isAuthRoute(anchorPath)) {
+        return;
+      }
+
+      if (isViewerCandidateRoute(anchorPath)) {
+        return;
+      }
+
+      disableElementInteraction(anchor, DISABLED_LINK_REASON);
+    });
+  }
+
+  function sanitizeViewerDom(): void {
+    restoreDisabledInteractions(DISABLED_LINK_REASON);
     setMode("viewer");
+    hideGlobalNav();
   }
 
-  function sanitizeHomeDom(): void {
-    viewerSession = null;
-    lastUtilityPath = "/";
-    setMode("utility");
-    stripLimitedNavEntrypoints();
-    applyEmptyState("home");
-  }
-
-  function sanitizeBlankRouteDom(): void {
-    viewerSession = null;
-    setMode("utility");
-    stripLimitedNavEntrypoints();
-    applyEmptyState("explore");
+  function redirectToDirect(): void {
+    clearPendingViewer();
+    clearActiveViewer();
+    restoreDisabledInteractions(DISABLED_LINK_REASON);
+    navigateTo(lastDirectPath || DEFAULT_RETURN_PATH);
   }
 
   function queueSanitize(): void {
@@ -430,27 +530,56 @@
     window.location.assign(targetUrl);
   }
 
+  function allowViewerRoute(path: string, returnPath: string): void {
+    clearPendingViewer();
+    storeActiveViewer({
+      path: normalizePath(path),
+      returnPath: normalizePath(returnPath),
+      flexibleUntil: Date.now() + VIEWER_CANONICALIZATION_TTL_MS,
+    });
+    sanitizeViewerDom();
+  }
+
   function applyRoutePolicy(): void {
     const path = normalizePath(window.location.pathname);
 
-    if (isHomeRoute(path)) {
-      sanitizeHomeDom();
+    if (isAuthRoute(path)) {
+      clearActiveViewer();
+      setMode("utility");
+      renderViewerBar(false);
       return;
     }
 
-    if (isBlankRoute(path)) {
-      sanitizeBlankRouteDom();
+    if (isDirectRoute(path)) {
+      clearPendingViewer();
+      sanitizeDirectDom(path);
       return;
     }
 
-    if (isViewerRoute(path)) {
-      sanitizeViewerDom(path);
+    const activeViewer = loadActiveViewer();
+    if (activeViewer && isViewerCandidateRoute(path)) {
+      if (path === activeViewer.path) {
+        viewerSession = activeViewer;
+        sanitizeViewerDom();
+        return;
+      }
+
+      if (Date.now() <= activeViewer.flexibleUntil) {
+        allowViewerRoute(path, activeViewer.returnPath);
+        return;
+      }
+
+      redirectToDirect();
       return;
     }
 
-    viewerSession = null;
-    lastUtilityPath = path;
-    sanitizeUtilityDom();
+    const pendingViewer = loadPendingViewer();
+    if (pendingViewer && isViewerCandidateRoute(path)) {
+      allowViewerRoute(path, pendingViewer.sourcePath);
+      return;
+    }
+
+    redirectToDirect();
   }
 
   function isEditableTarget(target: EventTarget | null): boolean {
@@ -469,22 +598,72 @@
   function installNavigationGuards(): void {
     const clickHandler = (event: Event) => {
       const target = event.target instanceof HTMLElement ? event.target : null;
-      const anchor = target?.closest("a[href]") as HTMLAnchorElement | null;
+      if (!target) {
+        return;
+      }
+
+      const currentPath = normalizePath(window.location.pathname);
+      const anchor = target.closest("a[href]") as HTMLAnchorElement | null;
+      const interactive = target.closest(
+        "button, [role='button'], [role='link']"
+      ) as HTMLElement | null;
+
+      if (isDirectRoute(currentPath) && interactive && !isEditableTarget(target)) {
+        storePendingViewer();
+      }
+
       if (!anchor) {
         return;
       }
 
       const href = anchor.getAttribute("href") ?? "";
-      if (!href.includes("threads.com")) {
+      const anchorPath = getPathFromHref(href);
+
+      if (isExternalHref(href)) {
+        event.preventDefault();
+        event.stopPropagation();
         return;
       }
 
-      event.preventDefault();
-      event.stopPropagation();
+      if (isDirectRoute(currentPath)) {
+        if (!anchorPath) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+
+        if (isDirectRoute(anchorPath) || isAuthRoute(anchorPath)) {
+          return;
+        }
+
+        if (isViewerCandidateRoute(anchorPath)) {
+          storePendingViewer();
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
+      if (viewerSession) {
+        const insideViewerBar = target.closest(`#${VIEWER_BAR_ID}`);
+        if (insideViewerBar) {
+          return;
+        }
+
+        if (anchorPath && isDirectRoute(anchorPath)) {
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        navigateTo(viewerSession.returnPath);
+      }
     };
 
     const keydownHandler = (event: KeyboardEvent) => {
-      if (currentMode !== "viewer" || isEditableTarget(event.target)) {
+      if (!viewerSession || isEditableTarget(event.target)) {
         return;
       }
 
@@ -494,7 +673,7 @@
     };
 
     const motionHandler = (event: Event) => {
-      if (currentMode !== "viewer") {
+      if (!viewerSession) {
         return;
       }
 
@@ -564,7 +743,7 @@
     }
 
     observer = new MutationObserver(() => {
-      queueSanitize();
+      hideGlobalNav();
     });
 
     observer.observe(document.documentElement, {
@@ -583,7 +762,9 @@
     installRouteHooks();
     startObserver();
     applyRoutePolicy();
-    console.log(`[JustAgram] Utility mode active (v${activeConfig.version})`);
+    console.log(
+      `[DistractionFreeDMs] Messages-only mode active (v${activeConfig.version})`
+    );
   }
 
   if (document.readyState === "loading") {

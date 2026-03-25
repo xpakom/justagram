@@ -11,7 +11,7 @@ export class BrowserService {
   public static async open(data: LoadedAssets | null): Promise<void> {
     if (!cordova?.InAppBrowser) {
       console.warn(
-        "[JustAgram] InAppBrowser not available. Opening in new tab."
+        "[DistractionFreeDMs] InAppBrowser not available. Opening in new tab."
       );
       window.open(this.INSTAGRAM_URL, "_blank");
       return;
