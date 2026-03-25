@@ -162,21 +162,6 @@
     return isStrictViewerRoute(path) || isTransientViewerRoute(path);
   }
 
-  function canonicalizeViewerPath(path: string): string | null {
-    const normalized = normalizePath(path);
-    const shareReelMatch = normalized.match(/^\/share\/reel\/([^/]+)\/?$/);
-    if (shareReelMatch) {
-      return normalizePath(`/reel/${shareReelMatch[1]}/`);
-    }
-
-    const sharePostMatch = normalized.match(/^\/share\/p\/([^/]+)\/?$/);
-    if (sharePostMatch) {
-      return normalizePath(`/p/${sharePostMatch[1]}/`);
-    }
-
-    return null;
-  }
-
   function isExternalHref(href: string | null | undefined): boolean {
     if (!href) {
       return false;
@@ -402,6 +387,10 @@
 
     const selectors = [
       "nav",
+      "header > div button[aria-label='Back']",
+      "header > div button[aria-label='Atrás']",
+      "header > div button[aria-label*='back' i]",
+      "header > div button[aria-label*='atrás' i]",
       "[role='tablist']",
       'a[href="/explore/"]',
       'a[href="/reels/"]',
@@ -547,6 +536,16 @@
         return;
       }
 
+      const isBottomRegion =
+        rect.bottom >= window.innerHeight - 8 &&
+        rect.top >= window.innerHeight * 0.65;
+      const isWideBottomChrome =
+        isBottomRegion && rect.width >= window.innerWidth * 0.45;
+      const isBottomCornerBubble =
+        isBottomRegion &&
+        rect.width <= 120 &&
+        rect.height <= 120 &&
+        rect.right >= window.innerWidth - 8;
       const isFixedChrome =
         (style.position === "fixed" || style.position === "sticky") &&
         rect.bottom >= window.innerHeight - 8 &&
@@ -568,9 +567,19 @@
         element instanceof HTMLAnchorElement
           ? element.getAttribute("href") ?? ""
           : "";
-      const leadsToDirect = href.includes("/direct/");
+      const leadsToUtilitySurface =
+        href.includes("/direct/") ||
+        href.includes("/explore/") ||
+        href.includes("/reels/") ||
+        /^\/[^/]+\/?$/.test(href);
 
-      if (isFixedChrome || hasViewerNavHints || leadsToDirect) {
+      if (
+        isFixedChrome ||
+        isWideBottomChrome ||
+        isBottomCornerBubble ||
+        hasViewerNavHints ||
+        leadsToUtilitySurface
+      ) {
         maskElement(element, VIEWER_CHROME_REASON);
       }
     });
@@ -611,20 +620,6 @@
 
   function applyRoutePolicy(): void {
     const path = normalizePath(window.location.pathname);
-    const canonicalViewerPath = canonicalizeViewerPath(path);
-
-    if (canonicalViewerPath) {
-      const currentHash = window.location.hash ?? "";
-      const canonicalUrl = new URL(
-        `${canonicalViewerPath}${currentHash}`,
-        window.location.origin
-      ).toString();
-
-      if (window.location.href !== canonicalUrl) {
-        window.location.replace(canonicalUrl);
-        return;
-      }
-    }
 
     if (isAuthRoute(path)) {
       clearActiveViewer();
