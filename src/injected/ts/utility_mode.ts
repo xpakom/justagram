@@ -519,6 +519,10 @@
   }
 
   function hideViewerChrome(): void {
+    if (window.location.pathname.includes('/reel/')) {
+      return;
+    }
+
     restoreMaskedElements(VIEWER_CHROME_REASON);
 
     document.querySelectorAll<HTMLElement>("body *").forEach((element) => {
@@ -753,6 +757,10 @@
 
     const motionHandler = (event: Event) => {
       if (!viewerSession) {
+        return;
+      }
+
+      if (window.location.pathname.includes('/reel/')) {
         return;
       }
 
